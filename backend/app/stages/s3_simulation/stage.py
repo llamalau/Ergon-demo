@@ -13,12 +13,30 @@ class SimulationStage(BaseStage):
     stage_name = "simulation"
     stage_order = 2
 
+    def _download_mesh_assets(self, context: dict) -> dict[str, bytes]:
+        """Download mesh files from MinIO and return as MuJoCo assets dict.
+
+        Keys are relative paths matching the MJCF meshdir references,
+        e.g. "meshes/visual.stl", "meshes/collision_0.stl".
+        """
+        assets = {}
+
+        visual_key = context.get("visual_mesh_key", "")
+        if visual_key:
+            assets["meshes/visual.stl"] = download_file(visual_key)
+
+        for i, key in enumerate(context.get("collision_mesh_keys", [])):
+            assets[f"meshes/collision_{i}.stl"] = download_file(key)
+
+        return assets
+
     def run(self, context: dict) -> dict:
         job_id = context["job_id"]
         mjcf_key = context.get("mjcf_key", "")
 
-        self.publish_progress(0.05, "Loading MJCF model")
+        self.publish_progress(0.05, "Loading MJCF model and meshes")
         mjcf_xml = download_file(mjcf_key).decode()
+        mesh_assets = self._download_mesh_assets(context)
 
         # Run simulation trials for each task type
         config = context.get("config", {})
@@ -47,6 +65,7 @@ class SimulationStage(BaseStage):
                     task_config=task_config,
                     max_steps=task_config["max_steps"],
                     render=True,
+                    assets=mesh_assets,
                 )
 
                 # Save telemetry

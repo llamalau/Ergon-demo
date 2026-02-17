@@ -11,6 +11,7 @@ def run_simulation(
     render: bool = True,
     render_width: int = 640,
     render_height: int = 480,
+    assets: dict[str, bytes] | None = None,
 ) -> dict:
     """Run a MuJoCo simulation with the given agent and task.
 
@@ -18,7 +19,7 @@ def run_simulation(
     """
     import mujoco
 
-    model = mujoco.MjModel.from_xml_string(mjcf_xml)
+    model = mujoco.MjModel.from_xml_string(mjcf_xml, assets=assets or {})
     data = mujoco.MjData(model)
 
     # Set up renderer if requested
