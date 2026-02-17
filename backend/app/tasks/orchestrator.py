@@ -3,28 +3,16 @@ from datetime import datetime, timezone
 
 from celery import chain
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 
-from app.core.database import async_session
+from app.core.database import SyncSession
 from app.models.job import Job, JobStage, JobStatus, StageStatus, STAGE_NAMES
 from app.models.upload import Upload
 from app.tasks.celery_app import celery_app
 
-import asyncio
 
-
-def _run_async(coro):
-    """Run async code from sync Celery task."""
-    loop = asyncio.new_event_loop()
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
-
-
-async def _update_stage_status(job_id: str, stage_name: str, status: StageStatus, **kwargs):
-    async with async_session() as db:
-        result = await db.execute(
+def _update_stage_status(job_id: str, stage_name: str, status: StageStatus, **kwargs):
+    with SyncSession() as db:
+        result = db.execute(
             select(JobStage).where(
                 JobStage.job_id == uuid.UUID(job_id),
                 JobStage.stage_name == stage_name,
@@ -39,12 +27,12 @@ async def _update_stage_status(job_id: str, stage_name: str, status: StageStatus
                 stage.completed_at = datetime.now(timezone.utc)
             for k, v in kwargs.items():
                 setattr(stage, k, v)
-            await db.commit()
+            db.commit()
 
 
-async def _update_job_status(job_id: str, status: JobStatus, **kwargs):
-    async with async_session() as db:
-        result = await db.execute(select(Job).where(Job.id == uuid.UUID(job_id)))
+def _update_job_status(job_id: str, status: JobStatus, **kwargs):
+    with SyncSession() as db:
+        result = db.execute(select(Job).where(Job.id == uuid.UUID(job_id)))
         job = result.scalar_one_or_none()
         if job:
             job.status = status
@@ -54,7 +42,7 @@ async def _update_job_status(job_id: str, status: JobStatus, **kwargs):
                 job.completed_at = datetime.now(timezone.utc)
             for k, v in kwargs.items():
                 setattr(job, k, v)
-            await db.commit()
+            db.commit()
 
 
 @celery_app.task(bind=True, name="run_stage")
@@ -62,7 +50,7 @@ def run_stage(self, context: dict, stage_index: int) -> dict:
     job_id = context["job_id"]
     stage_name = STAGE_NAMES[stage_index]
 
-    _run_async(_update_stage_status(job_id, stage_name, StageStatus.RUNNING))
+    _update_stage_status(job_id, stage_name, StageStatus.RUNNING)
 
     try:
         # Import and run the actual stage
@@ -70,27 +58,27 @@ def run_stage(self, context: dict, stage_index: int) -> dict:
         stage = stage_class(job_id)
         result = stage.execute(context)
 
-        _run_async(_update_stage_status(
+        _update_stage_status(
             job_id, stage_name, StageStatus.COMPLETED,
             result_data=result.get("stage_result"),
             progress=1.0,
-        ))
+        )
         return result
     except Exception as e:
-        _run_async(_update_stage_status(
+        _update_stage_status(
             job_id, stage_name, StageStatus.FAILED,
             error_message=str(e),
-        ))
-        _run_async(_update_job_status(job_id, JobStatus.FAILED, error_message=str(e)))
+        )
+        _update_job_status(job_id, JobStatus.FAILED, error_message=str(e))
         raise
 
 
-async def _get_job_context(job_id: str) -> dict:
+def _get_job_context(job_id: str) -> dict:
     """Fetch job + upload info to build the initial pipeline context."""
-    async with async_session() as db:
-        result = await db.execute(select(Job).where(Job.id == uuid.UUID(job_id)))
+    with SyncSession() as db:
+        result = db.execute(select(Job).where(Job.id == uuid.UUID(job_id)))
         job = result.scalar_one()
-        upload_result = await db.execute(select(Upload).where(Upload.id == job.upload_id))
+        upload_result = db.execute(select(Upload).where(Upload.id == job.upload_id))
         upload = upload_result.scalar_one()
         return {
             "job_id": job_id,
@@ -106,8 +94,8 @@ async def _get_job_context(job_id: str) -> dict:
 
 @celery_app.task(name="start_pipeline")
 def start_pipeline(job_id: str) -> dict:
-    _run_async(_update_job_status(job_id, JobStatus.RUNNING))
-    context = _run_async(_get_job_context(job_id))
+    _update_job_status(job_id, JobStatus.RUNNING)
+    context = _get_job_context(job_id)
 
     # Build a chain of 5 stages
     pipeline = chain(
@@ -125,7 +113,7 @@ def start_pipeline(job_id: str) -> dict:
 @celery_app.task(name="finalize_pipeline")
 def finalize_pipeline(context: dict) -> dict:
     job_id = context["job_id"]
-    _run_async(_update_job_status(job_id, JobStatus.COMPLETED))
+    _update_job_status(job_id, JobStatus.COMPLETED)
     return context
 
 
