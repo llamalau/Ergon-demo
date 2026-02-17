@@ -49,6 +49,8 @@ class InteractiveAgent:
         self._plan: MotionPlan | None = None
         self._current_step_idx: int = 0
         self._step_progress: int = 0
+        self._settling: bool = False
+        self._settle_progress: int = 0
         self._prev_ee: np.ndarray = _HOME_POS.copy()
         self._prev_wrist: list[float] = list(_HOME_WRIST)
         self._prev_fingers: dict[str, float] = dict(_OPEN_FINGERS)
@@ -128,41 +130,65 @@ class InteractiveAgent:
 
         elif self.phase == "executing":
             current_step = self._plan.steps[self._current_step_idx]
-            t = min(self._step_progress / max(current_step.duration_steps, 1), 1.0)
 
-            # Interpolate from previous pose to current step's target
-            ee = self._prev_ee * (1 - t) + np.array(current_step.ee_target) * t
-            wrist = [
-                self._prev_wrist[i] * (1 - t) + current_step.wrist_orientation[i] * t
-                for i in range(3)
-            ]
-            fingers = {
-                f: self._prev_fingers.get(f, 0.0) * (1 - t)
-                   + current_step.finger_config.get(f, 0.0) * t
-                for f in ["thumb", "index", "middle", "ring", "pinky"]
-            }
+            if self._settling:
+                # Hold final target pose so physics can converge
+                self._apply_pose(
+                    action,
+                    np.array(current_step.ee_target),
+                    list(current_step.wrist_orientation),
+                    dict(current_step.finger_config),
+                )
+                self._settle_progress += 1
 
-            self._apply_pose(action, ee, wrist, fingers)
-            self._step_progress += 1
+                # Settle for 30% of step duration (min 15, max 60 steps)
+                settle_duration = max(15, min(60,
+                                              int(current_step.duration_steps * 0.3)))
+                if self._settle_progress >= settle_duration:
+                    # Done settling — advance to next step
+                    self._settling = False
+                    self._settle_progress = 0
+                    self._prev_ee = np.array(current_step.ee_target)
+                    self._prev_wrist = list(current_step.wrist_orientation)
+                    self._prev_fingers = dict(current_step.finger_config)
+                    self._current_step_idx += 1
+                    self._step_progress = 0
 
-            # Advance to next step when duration is reached
-            if self._step_progress >= current_step.duration_steps:
-                # Snapshot the end pose as start of next interpolation
-                self._prev_ee = np.array(current_step.ee_target)
-                self._prev_wrist = list(current_step.wrist_orientation)
-                self._prev_fingers = dict(current_step.finger_config)
-                self._current_step_idx += 1
-                self._step_progress = 0
+                    if self._current_step_idx < len(self._plan.steps):
+                        next_step = self._plan.steps[self._current_step_idx]
+                        n = len(self._plan.steps)
+                        self._set_phase(
+                            "executing",
+                            f"Step {self._current_step_idx + 1}/{n}: "
+                            f"{next_step.description}",
+                        )
+                    else:
+                        self._set_phase("idle", "Idle — waiting for command")
+            else:
+                t = min(self._step_progress / max(current_step.duration_steps, 1),
+                        1.0)
 
-                if self._current_step_idx < len(self._plan.steps):
-                    next_step = self._plan.steps[self._current_step_idx]
-                    n = len(self._plan.steps)
-                    self._set_phase(
-                        "executing",
-                        f"Step {self._current_step_idx + 1}/{n}: {next_step.description}",
-                    )
-                else:
-                    self._set_phase("idle", "Idle — waiting for command")
+                # Interpolate from previous pose to current step's target
+                ee = (self._prev_ee * (1 - t)
+                      + np.array(current_step.ee_target) * t)
+                wrist = [
+                    self._prev_wrist[i] * (1 - t)
+                    + current_step.wrist_orientation[i] * t
+                    for i in range(3)
+                ]
+                fingers = {
+                    f: (self._prev_fingers.get(f, 0.0) * (1 - t)
+                        + current_step.finger_config.get(f, 0.0) * t)
+                    for f in ["thumb", "index", "middle", "ring", "pinky"]
+                }
+
+                self._apply_pose(action, ee, wrist, fingers)
+                self._step_progress += 1
+
+                # When interpolation is done, enter settling phase
+                if self._step_progress >= current_step.duration_steps:
+                    self._settling = True
+                    self._settle_progress = 0
 
         self.phase_step += 1
         return action
