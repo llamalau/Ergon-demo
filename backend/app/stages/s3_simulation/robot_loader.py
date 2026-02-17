@@ -1,57 +1,6 @@
-"""Load Shadow Hand DE3M5 model from mujoco_menagerie and build a 7-DOF arm mount."""
+"""Build a 24-DOF dexterous hand on a 7-DOF arm for MuJoCo simulation."""
 
-import importlib.resources
-from pathlib import Path
 from lxml import etree
-
-
-def _find_shadow_hand_dir() -> Path:
-    """Locate the Shadow Hand MJCF directory inside mujoco_menagerie."""
-    try:
-        import mujoco_menagerie
-
-        pkg_root = Path(mujoco_menagerie.__file__).parent
-    except (ImportError, AttributeError):
-        # Fallback: try site-packages path
-        import site
-
-        for sp in site.getsitepackages():
-            candidate = Path(sp) / "mujoco_menagerie"
-            if candidate.is_dir():
-                pkg_root = candidate
-                break
-        else:
-            raise ImportError("mujoco_menagerie package not found")
-
-    hand_dir = pkg_root / "shadow_hand"
-    if not hand_dir.is_dir():
-        # Try alternative name
-        hand_dir = pkg_root / "shadow_dexee"
-        if not hand_dir.is_dir():
-            # List available models for debugging
-            available = [d.name for d in pkg_root.iterdir() if d.is_dir()]
-            raise FileNotFoundError(
-                f"Shadow Hand model not found in mujoco_menagerie. "
-                f"Available models: {available}"
-            )
-    return hand_dir
-
-
-def _collect_mesh_assets(hand_dir: Path) -> dict[str, bytes]:
-    """Read all mesh files (.stl, .obj) from the Shadow Hand asset directories."""
-    assets = {}
-    mesh_dirs = [hand_dir / "assets", hand_dir / "meshes", hand_dir]
-
-    for mesh_dir in mesh_dirs:
-        if not mesh_dir.is_dir():
-            continue
-        for f in mesh_dir.rglob("*"):
-            if f.suffix.lower() in (".stl", ".obj", ".msh"):
-                # Key relative to the hand_dir so MJCF file references resolve
-                rel_key = str(f.relative_to(hand_dir))
-                assets[rel_key] = f.read_bytes()
-
-    return assets
 
 
 def _build_arm_xml() -> str:
@@ -59,7 +8,7 @@ def _build_arm_xml() -> str:
 
     Joints: shoulder_pan, shoulder_lift, shoulder_roll, elbow,
             wrist_roll, wrist_pitch, wrist_yaw
-    The arm positions the Shadow Hand's forearm above the workspace.
+    The arm positions the hand above the workspace.
     """
     return """
     <body name="arm_base" pos="0.0 0 0.5">
@@ -140,95 +89,17 @@ def _build_arm_actuators_xml() -> str:
 
 
 def load_shadow_hand() -> tuple[str, str, str, dict[str, bytes]]:
-    """Load the Shadow Hand model and return XML components + mesh assets.
+    """Build a 24-DOF dexterous hand model and return XML components.
 
     Returns:
-        (hand_body_xml, hand_actuator_xml, arm_body_xml_with_hand_slot,
-         mesh_assets_dict)
+        (hand_body_xml, hand_actuator_xml, hand_asset_xml, mesh_assets_dict)
 
-    The hand_body_xml is the <body> subtree for the Shadow Hand.
-    The hand_actuator_xml is the actuator definitions for the hand tendons.
-    The arm XML wraps the hand as child of the end-effector.
-    The assets dict maps relative file paths to mesh bytes.
-    """
-    try:
-        hand_dir = _find_shadow_hand_dir()
-        mesh_assets = _collect_mesh_assets(hand_dir)
-
-        # Try to find the main MJCF file
-        mjcf_candidates = [
-            hand_dir / "shadow_hand.xml",
-            hand_dir / "scene_left.xml",
-            hand_dir / "left_hand.xml",
-            hand_dir / "right_hand.xml",
-            hand_dir / "scene_right.xml",
-        ]
-        mjcf_file = None
-        for candidate in mjcf_candidates:
-            if candidate.exists():
-                mjcf_file = candidate
-                break
-
-        if mjcf_file is None:
-            # Find any XML file
-            xml_files = list(hand_dir.glob("*.xml"))
-            if xml_files:
-                mjcf_file = xml_files[0]
-
-        if mjcf_file is not None:
-            # Parse the Shadow Hand MJCF and extract body + actuator sections
-            tree = etree.parse(str(mjcf_file))
-            root = tree.getroot()
-
-            # Extract the hand body (first body under worldbody)
-            worldbody = root.find(".//worldbody")
-            hand_body_xml = ""
-            if worldbody is not None:
-                for body in worldbody.findall("body"):
-                    hand_body_xml += etree.tostring(
-                        body, pretty_print=True
-                    ).decode()
-
-            # Extract actuators
-            actuator_el = root.find(".//actuator")
-            hand_actuator_xml = ""
-            if actuator_el is not None:
-                for act in actuator_el:
-                    hand_actuator_xml += etree.tostring(
-                        act, pretty_print=True
-                    ).decode()
-
-            # Extract any asset definitions (meshes, materials)
-            asset_el = root.find(".//asset")
-            hand_asset_xml = ""
-            if asset_el is not None:
-                for a in asset_el:
-                    hand_asset_xml += etree.tostring(
-                        a, pretty_print=True
-                    ).decode()
-
-            return (
-                hand_body_xml,
-                hand_actuator_xml,
-                hand_asset_xml,
-                mesh_assets,
-            )
-
-    except (ImportError, FileNotFoundError):
-        pass
-
-    # Fallback: build a simplified Shadow-Hand-like model from scratch
-    return _build_fallback_hand()
-
-
-def _build_fallback_hand() -> tuple[str, str, str, dict[str, bytes]]:
-    """Build a simplified dexterous hand model when menagerie is unavailable.
-
-    24 DOF hand with 5 fingers, each with realistic joint ranges.
+    The hand is built procedurally with 5 fingers (thumb + 4 fingers),
+    each with realistic joint ranges. No external mesh files are needed.
     """
     hand_asset_xml = ""
 
-    # Finger definitions: (name, base_pos, base_axis, num_joints)
+    # Finger definitions: (name, base_pos, is_thumb)
     fingers = [
         ("thumb", "0.02 -0.01 0.04", True),
         ("index", "0.04 -0.02 0.09", False),
@@ -320,7 +191,7 @@ ARM_JOINT_NAMES = [
     "wrist_yaw",
 ]
 
-# Finger joint names (for fallback hand)
+# Finger joint names
 FINGER_JOINT_NAMES = {
     "thumb": ["thumb_rotation", "thumb_abduction", "thumb_mcp", "thumb_pip"],
     "index": ["index_abduction", "index_mcp", "index_pip", "index_dip"],
