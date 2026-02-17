@@ -3,10 +3,11 @@ FROM python:3.11-slim
 # Install system dependencies for MuJoCo (OSMesa) and pythonocc
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libosmesa6-dev \
-    libgl1-mesa-glx \
+    libgl1-mesa-dri \
     libglu1-mesa \
     libglfw3 \
     libglew-dev \
+    libxrandr2 \
     patchelf \
     gcc \
     g++ \
