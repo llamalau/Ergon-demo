@@ -5,6 +5,7 @@ import {
   Play,
   FileText,
   Box,
+  Gamepad2,
 } from "lucide-react";
 import clsx from "clsx";
 
@@ -14,6 +15,7 @@ const navItems = [
   { to: "/jobs", label: "Jobs", icon: Play },
   { to: "/environments", label: "Environments", icon: Box },
   { to: "/reports", label: "Reports", icon: FileText },
+  { to: "/playground", label: "Playground", icon: Gamepad2 },
 ];
 
 export default function AppShell({ children }: { children: React.ReactNode }) {

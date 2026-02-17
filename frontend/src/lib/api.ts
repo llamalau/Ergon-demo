@@ -89,6 +89,19 @@ export async function getJobVideos(jobId: string): Promise<VideoInfo[]> {
   return apiGet<VideoInfo[]>(`/jobs/${jobId}/videos`);
 }
 
+export interface PlaygroundSession {
+  session_id: string;
+  celery_task_id: string;
+}
+
+export async function startPlayground(jobId: string): Promise<PlaygroundSession> {
+  return apiPost<PlaygroundSession>("/playground/start", { job_id: jobId });
+}
+
+export async function stopPlayground(sessionId: string): Promise<{ session_id: string; status: string }> {
+  return apiPost("/playground/" + sessionId + "/stop");
+}
+
 export interface Report {
   id: string;
   job_id: string;

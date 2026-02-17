@@ -41,6 +41,32 @@ Based on the image, provide a manipulation plan as JSON with these fields:
 
 Respond with ONLY the JSON object, no other text."""
 
+COMMAND_INTERPRETATION_PROMPT = """You are a robotic manipulation planner controlling a Shadow Hand (5-finger dexterous hand) mounted on a 7-DOF arm.
+
+The user has given a free-form natural language command:
+Command: {command}
+
+Object information:
+{object_info}
+
+Analyze the scene image and produce a manipulation plan to execute this command.
+Respond with ONLY a JSON object:
+{{
+  "grasp_point": [x, y, z],
+  "approach_vector": [x, y, z],
+  "finger_config": {{
+    "thumb": 0.0-1.0,
+    "index": 0.0-1.0,
+    "middle": 0.0-1.0,
+    "ring": 0.0-1.0,
+    "pinky": 0.0-1.0
+  }},
+  "force_level": "gentle|medium|firm",
+  "ee_target": [x, y, z],
+  "wrist_orientation": [roll, pitch, yaw],
+  "notes": "brief reasoning"
+}}"""
+
 SUCCESS_EVAL_PROMPT = """You are evaluating the result of a robotic manipulation task.
 
 Task: {task_description}
@@ -227,3 +253,43 @@ def evaluate_success_vlm(
     except Exception as e:
         logger.warning("VLM success evaluation failed: %s", e)
         return {"success": False, "confidence": 0.0, "reasoning": f"VLM error: {e}"}
+
+
+def interpret_command(
+    image: np.ndarray,
+    command: str,
+    object_info: dict | None = None,
+) -> ManipulationPlan:
+    """Interpret a free-form natural language command into a ManipulationPlan.
+
+    Args:
+        image: RGB image from camera (H, W, 3) uint8
+        command: Free-form text, e.g. "pick up the object"
+        object_info: Optional dict with object metadata
+
+    Returns:
+        ManipulationPlan with grasp strategy
+    """
+    image_b64 = _encode_image(image)
+    prompt = COMMAND_INTERPRETATION_PROMPT.format(
+        command=command,
+        object_info=json.dumps(object_info or {}, indent=2),
+    )
+
+    try:
+        response_text = _call_vlm(image_b64, prompt)
+        data = _parse_json_response(response_text)
+        return ManipulationPlan(
+            grasp_point=data.get("grasp_point", [0.5, 0.0, 0.3]),
+            approach_vector=data.get("approach_vector", [0.0, 0.0, -1.0]),
+            finger_config=data.get("finger_config",
+                                    {"thumb": 0.5, "index": 0.5, "middle": 0.5,
+                                     "ring": 0.5, "pinky": 0.5}),
+            force_level=data.get("force_level", "medium"),
+            ee_target=data.get("ee_target", [0.5, 0.0, 0.4]),
+            wrist_orientation=data.get("wrist_orientation", [0.0, -0.3, 0.0]),
+            notes=data.get("notes", ""),
+        )
+    except Exception as e:
+        logger.warning("VLM command interpretation failed: %s; using default plan", e)
+        return ManipulationPlan()

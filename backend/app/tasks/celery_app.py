@@ -6,7 +6,7 @@ celery_app = Celery(
     "ergon",
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND,
-    include=["app.tasks.orchestrator"],
+    include=["app.tasks.orchestrator", "app.tasks.playground_tasks"],
 )
 
 celery_app.conf.update(

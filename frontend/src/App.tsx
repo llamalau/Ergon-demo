@@ -6,6 +6,7 @@ import JobDetail from "./pages/JobDetail";
 import NewJob from "./pages/NewJob";
 import Environments from "./pages/Environments";
 import ReportPage from "./pages/ReportPage";
+import Playground from "./pages/Playground";
 
 export default function App() {
   return (
@@ -17,6 +18,7 @@ export default function App() {
       <Route path="/jobs/:jobId" element={<JobDetail />} />
       <Route path="/environments" element={<Environments />} />
       <Route path="/reports/:jobId" element={<ReportPage />} />
+      <Route path="/playground" element={<Playground />} />
     </Routes>
   );
 }
