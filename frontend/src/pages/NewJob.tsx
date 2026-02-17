@@ -18,6 +18,8 @@ export default function NewJob() {
   const [envs, setEnvs] = useState<Environment[]>([]);
   const [environment, setEnvironment] = useState("open_space");
   const [overrides, setOverrides] = useState<Record<string, unknown>>({});
+  const [objectPos, setObjectPos] = useState({ x: "", y: "", z: "" });
+  const [robotPos, setRobotPos] = useState({ x: "", y: "", z: "" });
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,10 +32,27 @@ export default function NewJob() {
     setSubmitting(true);
     setError(null);
     try {
+      const config: Record<string, unknown> = { property_overrides: overrides };
+
+      if (objectPos.x !== "" || objectPos.y !== "" || objectPos.z !== "") {
+        config.object_position = [
+          objectPos.x !== "" ? parseFloat(objectPos.x) : 0.5,
+          objectPos.y !== "" ? parseFloat(objectPos.y) : 0,
+          objectPos.z !== "" ? parseFloat(objectPos.z) : 0.3,
+        ];
+      }
+      if (robotPos.x !== "" || robotPos.y !== "" || robotPos.z !== "") {
+        config.robot_position = [
+          robotPos.x !== "" ? parseFloat(robotPos.x) : 0.0,
+          robotPos.y !== "" ? parseFloat(robotPos.y) : 0,
+          robotPos.z !== "" ? parseFloat(robotPos.z) : 0.5,
+        ];
+      }
+
       const job = await apiPost<Job>("/jobs", {
         upload_id: uploadId,
         environment,
-        config: { property_overrides: overrides },
+        config,
       });
       navigate(`/jobs/${job.id}`);
     } catch (e) {
@@ -80,6 +99,62 @@ export default function NewJob() {
                   <p className="text-xs mt-1 opacity-70">{env.description}</p>
                 </button>
               ))}
+            </div>
+          </div>
+
+          <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+            <label className="block text-sm text-gray-400 mb-3">
+              Placement
+            </label>
+            <div className="space-y-3">
+              <div>
+                <p className="text-xs text-gray-500 mb-1">Object Position</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {(["x", "y", "z"] as const).map((axis) => (
+                    <div key={`obj-${axis}`} className="relative">
+                      <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-gray-500 uppercase">
+                        {axis}
+                      </span>
+                      <input
+                        type="number"
+                        step="0.1"
+                        placeholder={
+                          axis === "x" ? "0.5" : axis === "y" ? "0" : "0.3"
+                        }
+                        value={objectPos[axis]}
+                        onChange={(e) =>
+                          setObjectPos((p) => ({ ...p, [axis]: e.target.value }))
+                        }
+                        className="w-full pl-7 pr-2 py-2 bg-gray-800 border border-gray-700 rounded text-sm text-white placeholder-gray-600 focus:border-ergon-600 focus:outline-none"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 mb-1">Robot Position</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {(["x", "y", "z"] as const).map((axis) => (
+                    <div key={`robot-${axis}`} className="relative">
+                      <span className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-gray-500 uppercase">
+                        {axis}
+                      </span>
+                      <input
+                        type="number"
+                        step="0.1"
+                        placeholder={
+                          axis === "x" ? "0.0" : axis === "y" ? "0" : "0.5"
+                        }
+                        value={robotPos[axis]}
+                        onChange={(e) =>
+                          setRobotPos((p) => ({ ...p, [axis]: e.target.value }))
+                        }
+                        className="w-full pl-7 pr-2 py-2 bg-gray-800 border border-gray-700 rounded text-sm text-white placeholder-gray-600 focus:border-ergon-600 focus:outline-none"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           </div>
 

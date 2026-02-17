@@ -3,15 +3,15 @@
 from lxml import etree
 
 
-def _build_arm_xml() -> str:
+def _build_arm_xml(base_pos: str = "0.0 0 0.5") -> str:
     """Build XML snippet for a 7-DOF position-controlled arm.
 
     Joints: shoulder_pan, shoulder_lift, shoulder_roll, elbow,
             wrist_roll, wrist_pitch, wrist_yaw
     The arm positions the hand above the workspace.
     """
-    return """
-    <body name="arm_base" pos="0.0 0 0.5">
+    return f"""
+    <body name="arm_base" pos="{base_pos}">
       <geom name="arm_base_geom" type="cylinder" size="0.04 0.02"
             rgba="0.3 0.3 0.3 1" mass="2.0"/>
 
@@ -201,9 +201,9 @@ FINGER_JOINT_NAMES = {
 }
 
 
-def get_arm_xml() -> str:
+def get_arm_xml(base_pos: str = "0.0 0 0.5") -> str:
     """Return the 7-DOF arm body XML."""
-    return _build_arm_xml()
+    return _build_arm_xml(base_pos=base_pos)
 
 
 def get_arm_actuators_xml() -> str:

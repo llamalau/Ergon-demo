@@ -18,11 +18,17 @@ def build_mjcf(
     visual_mesh_file: str,
     center_of_mass: list[float],
     environment: str = "open_space",
+    object_position: list[float] | None = None,
+    robot_position: list[float] | None = None,
 ) -> tuple[str, dict[str, bytes]]:
     """Build a complete MJCF XML string for the object + environment + robot.
 
     Returns (mjcf_xml_string, robot_mesh_assets_dict).
     """
+    if object_position is None:
+        object_position = [0.5, 0, 0.3]
+    if robot_position is None:
+        robot_position = [0.0, 0, 0.5]
 
     root = etree.Element("mujoco", model=model_name)
 
@@ -90,8 +96,9 @@ def build_mjcf(
                      fovy="60")
 
     # Target object body
+    obj_pos_str = " ".join(str(v) for v in object_position)
     obj_body = etree.SubElement(worldbody, "body", name="object",
-                                pos="0.5 0 0.3")
+                                pos=obj_pos_str)
     etree.SubElement(obj_body, "freejoint", name="object_joint")
 
     # Inertial
@@ -119,7 +126,8 @@ def build_mjcf(
                          condim=str(contact_params["condim"]))
 
     # Robot: 7-DOF arm with Shadow Hand attached at end-effector
-    arm_xml = get_arm_xml()
+    robot_pos_str = " ".join(str(v) for v in robot_position)
+    arm_xml = get_arm_xml(base_pos=robot_pos_str)
     try:
         arm_tree = etree.fromstring(f"<root>{arm_xml}</root>")
         # Find the end_effector body and attach the hand

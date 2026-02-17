@@ -18,6 +18,9 @@ class DigitalTwinStage(BaseStage):
         file_format = context.get("file_format", "stl")
         properties = context.get("physical_properties", {})
         environment = context.get("environment", "open_space")
+        config = context.get("config", {})
+        object_position = config.get("object_position")
+        robot_position = config.get("robot_position")
 
         self.publish_progress(0.1, "Generating collision meshes")
         mesh_data = download_file(storage_key)
@@ -52,6 +55,8 @@ class DigitalTwinStage(BaseStage):
             visual_mesh_file="visual.stl",
             center_of_mass=properties.get("center_of_mass", [0, 0, 0]),
             environment=environment,
+            object_position=object_position,
+            robot_position=robot_position,
         )
 
         mjcf_key = f"jobs/{job_id}/model.xml"
