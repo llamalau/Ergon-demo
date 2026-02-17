@@ -115,9 +115,14 @@ class InteractiveAgent:
             logger.info("Motion plan: %s (%d steps)",
                         self._plan.description, len(self._plan.steps))
             if self._plan.steps:
+                reasoning_prefix = ""
+                if self._plan.reasoning:
+                    reasoning_prefix = f"VLM: {self._plan.reasoning}\n"
                 step_desc = self._plan.steps[0].description
-                self._set_phase("executing",
-                                f"Step 1/{len(self._plan.steps)}: {step_desc}")
+                self._set_phase(
+                    "executing",
+                    f"{reasoning_prefix}Step 1/{len(self._plan.steps)}: {step_desc}",
+                )
             else:
                 self._set_phase("idle", "Idle — waiting for command")
 
@@ -185,10 +190,16 @@ class InteractiveAgent:
         img = obs_image if obs_image is not None else self._last_obs_image
         if img is not None:
             try:
+                robot_state = {
+                    "ee_position": self._prev_ee.tolist(),
+                    "wrist_orientation": list(self._prev_wrist),
+                    "finger_state": dict(self._prev_fingers),
+                }
                 return interpret_command(
                     image=img,
                     command=command,
                     object_info=self._object_info,
+                    robot_state=robot_state,
                 )
             except Exception as e:
                 logger.warning("VLM failed: %s; using fallback", e)

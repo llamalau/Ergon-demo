@@ -12,6 +12,7 @@ import time
 
 import numpy as np
 import redis
+from PIL import Image, ImageDraw
 
 from app.core.config import settings
 from app.stages.s3_simulation.interactive_agent import InteractiveAgent
@@ -45,6 +46,44 @@ def _render_camera(renderer, model, data, cam_id):
         return None
 
 
+def _annotate_obs_image(frame: np.ndarray, ee_pos: list[float],
+                        obj_pos: list[float]) -> np.ndarray:
+    """Draw spatial annotations on the VLM observation image.
+
+    Adds a coordinate axes indicator (RGB arrows for X/Y/Z) in the top-left
+    corner and a text label with current EE and object positions.
+    """
+    if frame.dtype != np.uint8:
+        frame = (np.clip(frame, 0, 1) * 255).astype(np.uint8)
+    pil_img = Image.fromarray(frame)
+    draw = ImageDraw.Draw(pil_img)
+
+    # --- Coordinate axes indicator (top-left corner) ---
+    origin = (30, 40)
+    arrow_len = 20
+    # X axis (red) — points right in image (approximating +X forward from overview cam)
+    draw.line([origin, (origin[0] + arrow_len, origin[1])], fill=(255, 0, 0), width=2)
+    draw.text((origin[0] + arrow_len + 2, origin[1] - 6), "X", fill=(255, 0, 0))
+    # Y axis (green) — points up in image (approximating +Y left)
+    draw.line([origin, (origin[0], origin[1] - arrow_len)], fill=(0, 255, 0), width=2)
+    draw.text((origin[0] - 4, origin[1] - arrow_len - 14), "Y", fill=(0, 255, 0))
+    # Z axis (blue) — diagonal for depth cue
+    draw.line([origin, (origin[0] - 14, origin[1] + 14)], fill=(0, 128, 255), width=2)
+    draw.text((origin[0] - 24, origin[1] + 14), "Z", fill=(0, 128, 255))
+
+    # --- Text labels (bottom of image) ---
+    h = pil_img.height
+    ee_str = f"EE: [{ee_pos[0]:.2f}, {ee_pos[1]:.2f}, {ee_pos[2]:.2f}]"
+    obj_str = f"Obj: [{obj_pos[0]:.2f}, {obj_pos[1]:.2f}, {obj_pos[2]:.2f}]"
+
+    # Semi-transparent background for readability
+    draw.rectangle([(0, h - 30), (pil_img.width, h)], fill=(0, 0, 0, 180))
+    draw.text((5, h - 28), ee_str, fill=(255, 255, 255))
+    draw.text((5, h - 14), obj_str, fill=(200, 200, 255))
+
+    return np.array(pil_img)
+
+
 def _frame_to_base64_jpeg(frame: np.ndarray, quality: int = 70) -> str:
     """Encode a numpy RGB frame as a base64 JPEG string."""
     from PIL import Image
@@ -72,10 +111,8 @@ def run_interactive_simulation(
     data = mujoco.MjData(model)
 
     renderer = mujoco.Renderer(model, height=render_height, width=render_width)
-    obs_renderer = mujoco.Renderer(model, height=256, width=256)
 
     overview_cam_id = _safe_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "overview_cam")
-    wrist_cam_id = _safe_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "wrist_cam")
 
     agent = InteractiveAgent()
     agent.reset(model, data)
@@ -109,9 +146,15 @@ def run_interactive_simulation(
                             agent.receive_command(text)
 
             # --- Agent observation (every 50 steps) ---
+            # Use the overview_cam (fixed third-person view) for VLM reasoning
             obs_image = None
             if step % 50 == 0:
-                obs_image = _render_camera(obs_renderer, model, data, wrist_cam_id)
+                obs_image = _render_camera(renderer, model, data, overview_cam_id)
+                if obs_image is not None:
+                    # Annotate with spatial cues for the VLM
+                    ee_pos = agent._prev_ee.tolist()
+                    obj_pos = agent._object_info.get("object_position", [0.5, 0.0, 0.3])
+                    obs_image = _annotate_obs_image(obs_image, ee_pos, obj_pos)
 
             # --- Agent step ---
             action = agent.act(model, data, step, obs_image)
@@ -164,6 +207,5 @@ def run_interactive_simulation(
         r.hset(_state_hash(session_id), "phase", "stopped")
         r.expire(_state_hash(session_id), 60)  # keep briefly for final reads
         renderer.close()
-        obs_renderer.close()
         r.close()
         logger.info("Interactive simulation ended for session %s at step %d", session_id, step)
