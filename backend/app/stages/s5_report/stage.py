@@ -1,6 +1,5 @@
 import json
 import uuid
-import asyncio
 
 from app.tasks.base_stage import BaseStage
 from app.services.storage import upload_file
@@ -8,8 +7,9 @@ from app.stages.s5_report.score_calculator import calculate_composite_score
 from app.stages.s5_report.recommendations import generate_recommendations
 from app.stages.s5_report.report_builder import build_report
 from app.stages.s5_report.pdf_generator import generate_pdf
-from app.core.database import async_session
+from app.core.database import SyncSession
 from app.models.report import Report
+from app.models.job import Job, JobStatus
 
 
 class ReportStage(BaseStage):
@@ -76,16 +76,8 @@ class ReportStage(BaseStage):
         return context
 
     def _save_report(self, job_id, overall_score, sub_scores, metrics, recommendations, pdf_key):
-        loop = asyncio.new_event_loop()
-        try:
-            loop.run_until_complete(self._async_save_report(
-                job_id, overall_score, sub_scores, metrics, recommendations, pdf_key
-            ))
-        finally:
-            loop.close()
-
-    async def _async_save_report(self, job_id, overall_score, sub_scores, metrics, recommendations, pdf_key):
-        async with async_session() as db:
+        from sqlalchemy import select
+        with SyncSession() as db:
             report = Report(
                 job_id=uuid.UUID(job_id),
                 overall_score=overall_score,
@@ -95,9 +87,15 @@ class ReportStage(BaseStage):
                 pdf_storage_key=pdf_key,
             )
             db.add(report)
-            await db.commit()
+            db.commit()
 
     def _complete_job(self, job_id):
-        from app.tasks.orchestrator import _run_async, _update_job_status
-        from app.models.job import JobStatus
-        _run_async(_update_job_status(job_id, JobStatus.COMPLETED))
+        from sqlalchemy import select
+        from datetime import datetime, timezone
+        with SyncSession() as db:
+            result = db.execute(select(Job).where(Job.id == uuid.UUID(job_id)))
+            job = result.scalar_one_or_none()
+            if job:
+                job.status = JobStatus.COMPLETED
+                job.completed_at = datetime.now(timezone.utc)
+                db.commit()
