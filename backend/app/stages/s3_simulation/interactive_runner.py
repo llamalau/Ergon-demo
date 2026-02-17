@@ -46,37 +46,67 @@ def _render_camera(renderer, model, data, cam_id):
         return None
 
 
-def _annotate_obs_image(frame: np.ndarray, ee_pos: list[float],
-                        obj_pos: list[float]) -> np.ndarray:
+def _annotate_obs_image(frame: np.ndarray, model, data,
+                        cam_id: int, ee_site_id, obj_body_id) -> np.ndarray:
     """Draw spatial annotations on the VLM observation image.
 
-    Adds a coordinate axes indicator (RGB arrows for X/Y/Z) in the top-left
-    corner and a text label with current EE and object positions.
+    Reads actual positions from MuJoCo physics state (not commanded targets).
+    Projects world coordinate axes through the camera's rotation matrix so
+    the arrows match what the VLM sees in the image.
     """
+    import mujoco
+
     if frame.dtype != np.uint8:
         frame = (np.clip(frame, 0, 1) * 255).astype(np.uint8)
     pil_img = Image.fromarray(frame)
     draw = ImageDraw.Draw(pil_img)
 
-    # --- Coordinate axes indicator (top-left corner) ---
-    origin = (30, 40)
-    arrow_len = 20
-    # X axis (red) — points right in image (approximating +X forward from overview cam)
-    draw.line([origin, (origin[0] + arrow_len, origin[1])], fill=(255, 0, 0), width=2)
-    draw.text((origin[0] + arrow_len + 2, origin[1] - 6), "X", fill=(255, 0, 0))
-    # Y axis (green) — points up in image (approximating +Y left)
-    draw.line([origin, (origin[0], origin[1] - arrow_len)], fill=(0, 255, 0), width=2)
-    draw.text((origin[0] - 4, origin[1] - arrow_len - 14), "Y", fill=(0, 255, 0))
-    # Z axis (blue) — diagonal for depth cue
-    draw.line([origin, (origin[0] - 14, origin[1] + 14)], fill=(0, 128, 255), width=2)
-    draw.text((origin[0] - 24, origin[1] + 14), "Z", fill=(0, 128, 255))
+    # --- Read actual positions from physics ---
+    if ee_site_id is not None and ee_site_id >= 0:
+        ee_pos = data.site_xpos[ee_site_id].copy()
+    else:
+        ee_pos = np.array([0.3, 0.0, 0.6])
 
-    # --- Text labels (bottom of image) ---
+    if obj_body_id is not None and obj_body_id >= 0:
+        obj_pos = data.xpos[obj_body_id].copy()
+    else:
+        obj_pos = np.array([0.5, 0.0, 0.3])
+
+    # --- Coordinate axes: project world axes through camera rotation ---
+    # data.cam_xmat stores the 3x3 rotation matrix (row-major, 9 elements)
+    # Columns of this matrix are the camera's local x, y, z axes in world coords
+    if cam_id is not None and cam_id >= 0:
+        cam_mat = data.cam_xmat[cam_id].reshape(3, 3)
+        # cam_mat rows: cam_x_world, cam_y_world, cam_z_world
+        # To project world axis v onto image: img_x = dot(v, cam_x), img_y = dot(v, cam_y)
+        # PIL image: +x right, +y down (so negate cam_y projection)
+        cam_x = cam_mat[0]  # camera right direction in world
+        cam_y = cam_mat[1]  # camera up direction in world
+
+        origin = (35, 50)
+        arrow_len = 25
+        axes = [
+            (np.array([1, 0, 0]), "X", (255, 50, 50)),
+            (np.array([0, 1, 0]), "Y", (50, 255, 50)),
+            (np.array([0, 0, 1]), "Z", (50, 150, 255)),
+        ]
+        for world_axis, label, color in axes:
+            # Project world axis onto camera image plane
+            px = float(np.dot(world_axis, cam_x))
+            py = float(-np.dot(world_axis, cam_y))  # negate: cam_y is up, PIL y is down
+            # Normalize to fixed arrow length
+            mag = max(np.sqrt(px**2 + py**2), 1e-6)
+            dx = int(arrow_len * px / mag)
+            dy = int(arrow_len * py / mag)
+            end = (origin[0] + dx, origin[1] + dy)
+            draw.line([origin, end], fill=color, width=2)
+            draw.text((end[0] + 2, end[1] - 6), label, fill=color)
+
+    # --- Text labels with actual physics positions ---
     h = pil_img.height
     ee_str = f"EE: [{ee_pos[0]:.2f}, {ee_pos[1]:.2f}, {ee_pos[2]:.2f}]"
     obj_str = f"Obj: [{obj_pos[0]:.2f}, {obj_pos[1]:.2f}, {obj_pos[2]:.2f}]"
 
-    # Semi-transparent background for readability
     draw.rectangle([(0, h - 30), (pil_img.width, h)], fill=(0, 0, 0, 180))
     draw.text((5, h - 28), ee_str, fill=(255, 255, 255))
     draw.text((5, h - 14), obj_str, fill=(200, 200, 255))
@@ -113,6 +143,8 @@ def run_interactive_simulation(
     renderer = mujoco.Renderer(model, height=render_height, width=render_width)
 
     overview_cam_id = _safe_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "overview_cam")
+    ee_site_id = _safe_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "ee_site")
+    obj_body_id = _safe_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "object")
 
     agent = InteractiveAgent()
     agent.reset(model, data)
@@ -151,10 +183,11 @@ def run_interactive_simulation(
             if step % 50 == 0:
                 obs_image = _render_camera(renderer, model, data, overview_cam_id)
                 if obs_image is not None:
-                    # Annotate with spatial cues for the VLM
-                    ee_pos = agent._prev_ee.tolist()
-                    obj_pos = agent._object_info.get("object_position", [0.5, 0.0, 0.3])
-                    obs_image = _annotate_obs_image(obs_image, ee_pos, obj_pos)
+                    # Annotate with actual physics positions and correct axes
+                    obs_image = _annotate_obs_image(
+                        obs_image, model, data,
+                        overview_cam_id, ee_site_id, obj_body_id,
+                    )
 
             # --- Agent step ---
             action = agent.act(model, data, step, obs_image)
