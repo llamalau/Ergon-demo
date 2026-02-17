@@ -76,7 +76,7 @@ class ReportStage(BaseStage):
         return context
 
     def _save_report(self, job_id, overall_score, sub_scores, metrics, recommendations, pdf_key):
-        from sqlalchemy import select
+        from datetime import datetime, timezone
         with SyncSession() as db:
             report = Report(
                 job_id=uuid.UUID(job_id),
@@ -90,8 +90,8 @@ class ReportStage(BaseStage):
             db.commit()
 
     def _complete_job(self, job_id):
-        from sqlalchemy import select
         from datetime import datetime, timezone
+        from sqlalchemy import select
         with SyncSession() as db:
             result = db.execute(select(Job).where(Job.id == uuid.UUID(job_id)))
             job = result.scalar_one_or_none()
