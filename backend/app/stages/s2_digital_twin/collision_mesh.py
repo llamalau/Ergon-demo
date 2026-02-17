@@ -4,6 +4,9 @@ import io
 import numpy as np
 import trimesh
 
+# Must match the threshold in mesh_parser.py
+_MAX_EXTENT_M = 2.0
+
 
 def generate_collision_meshes(visual_mesh_data: bytes, file_format: str = "stl") -> dict:
     """Generate collision meshes via convex decomposition.
@@ -16,6 +19,11 @@ def generate_collision_meshes(visual_mesh_data: bytes, file_format: str = "stl")
         mesh = trimesh.util.concatenate(meshes) if meshes else None
     if mesh is None:
         raise ValueError("No geometry found for collision mesh generation")
+
+    # Auto-scale mm → m (same heuristic as ingestion parser)
+    max_extent = max(mesh.extents)
+    if max_extent > _MAX_EXTENT_M:
+        mesh.apply_scale(0.001)
 
     # Try convex decomposition; fall back to convex hull
     try:

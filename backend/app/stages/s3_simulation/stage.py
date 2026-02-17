@@ -11,8 +11,15 @@ TASK_TYPES = ["grasp", "reorient", "use", "transfer"]
 
 
 def create_agent(agent_type: str, config: dict):
-    """Create the appropriate agent based on configuration."""
-    if agent_type == "vla" and getattr(settings, "VLM_API_KEY", ""):
+    """Create the appropriate agent based on configuration.
+
+    Auto-selects VLA when an API key is configured, unless explicitly
+    set to "scripted".
+    """
+    vlm_key = getattr(settings, "VLM_API_KEY", "")
+    # Auto-upgrade to VLA when key is present and agent_type isn't forced to scripted
+    use_vla = (agent_type == "vla") or (vlm_key and agent_type != "scripted")
+    if use_vla and vlm_key:
         from app.stages.s3_simulation.vla_agent import VLMAgent
         return VLMAgent(config)
     return ScriptedAgent()
@@ -63,7 +70,7 @@ class SimulationStage(BaseStage):
         config = context.get("config", {})
         task_types = config.get("task_types", ["grasp", "reorient"])
         num_trials = config.get("num_trials", 1)
-        agent_type = config.get("agent_type", "scripted")
+        agent_type = config.get("agent_type", "auto")
 
         all_results = []
         total_work = len(task_types) * num_trials

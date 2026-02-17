@@ -4,6 +4,11 @@ import numpy as np
 import trimesh
 
 
+# Max reasonable extent in meters for a handheld/manipulable object.
+# If any axis exceeds this, assume the mesh is in millimeters.
+_MAX_EXTENT_M = 2.0
+
+
 def parse_stl(data: bytes) -> dict:
     """Parse STL file and extract geometry info."""
     mesh = trimesh.load(io.BytesIO(data), file_type="stl")
@@ -22,6 +27,21 @@ def parse_mesh(data: bytes, file_format: str) -> dict:
     return _extract_mesh_info(mesh)
 
 
+def _auto_scale_to_meters(mesh) -> tuple:
+    """Detect if mesh units are likely millimeters and return scale factor.
+
+    STL/OBJ files carry no unit metadata. Heuristic: if the largest
+    extent exceeds _MAX_EXTENT_M, assume millimeters and scale by 0.001.
+
+    Returns (scale_factor, unit_detected).
+    """
+    max_extent = max(mesh.extents)
+    if max_extent > _MAX_EXTENT_M:
+        # Likely millimeters
+        return 0.001, "mm"
+    return 1.0, "m"
+
+
 def _extract_mesh_info(mesh) -> dict:
     """Extract geometric properties from a trimesh object."""
     if isinstance(mesh, trimesh.Scene):
@@ -30,6 +50,11 @@ def _extract_mesh_info(mesh) -> dict:
         if not meshes:
             raise ValueError("Empty scene — no geometry found")
         mesh = trimesh.util.concatenate(meshes)
+
+    # Auto-detect units and scale to meters
+    scale, detected_unit = _auto_scale_to_meters(mesh)
+    if scale != 1.0:
+        mesh.apply_scale(scale)
 
     bounds = mesh.bounds.tolist()
     extents = mesh.extents.tolist()
@@ -44,4 +69,6 @@ def _extract_mesh_info(mesh) -> dict:
         "center_of_mass": mesh.center_mass.tolist(),
         "is_watertight": bool(mesh.is_watertight),
         "euler_number": int(mesh.euler_number),
+        "detected_unit": detected_unit,
+        "scale_applied": scale,
     }
