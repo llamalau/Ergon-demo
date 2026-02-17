@@ -15,20 +15,19 @@ setup_logging()
 log = get_logger("ergon")
 
 
-def _run_migrations():
-    """Run Alembic migrations on startup."""
-    from alembic.config import Config
-    from alembic import command
-    alembic_cfg = Config("/app/alembic.ini")
-    alembic_cfg.set_main_option("script_location", "/app/alembic")
-    command.upgrade(alembic_cfg, "head")
+async def _create_tables():
+    """Create all database tables if they don't exist."""
+    from app.core.database import Base
+    from app.models import *  # noqa: F401,F403 — ensure all models registered
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("starting_up", service=settings.PROJECT_NAME)
-    _run_migrations()
-    log.info("migrations_complete")
+    await _create_tables()
+    log.info("tables_ready")
     ensure_bucket()
     log.info("startup_complete")
     yield
