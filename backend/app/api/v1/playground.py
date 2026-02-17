@@ -90,22 +90,35 @@ async def playground_ws(websocket: WebSocket, session_id: str):
 
     - Relays frames/status from Redis pub/sub → WebSocket
     - Relays commands from WebSocket → Redis list
+
+    Uses asyncio.to_thread for blocking Redis calls and a lock to prevent
+    concurrent WebSocket sends.
     """
     await websocket.accept()
 
     r = redis.from_url(settings.REDIS_URL)
     pubsub = r.pubsub()
     pubsub.subscribe(_frames_channel(session_id))
+    send_lock = asyncio.Lock()
+
+    async def _safe_send(text: str):
+        async with send_lock:
+            await websocket.send_text(text)
 
     async def _relay_frames():
         """Subscribe to Redis channel and forward messages to WebSocket."""
         try:
             while True:
-                msg = pubsub.get_message(ignore_subscribe_messages=True, timeout=0.05)
+                # Run blocking Redis call in thread pool
+                msg = await asyncio.to_thread(
+                    pubsub.get_message,
+                    ignore_subscribe_messages=True,
+                    timeout=0.05,
+                )
                 if msg and msg["type"] == "message":
-                    await websocket.send_text(msg["data"].decode())
+                    await _safe_send(msg["data"].decode())
                 else:
-                    await asyncio.sleep(0.02)
+                    await asyncio.sleep(0.01)
         except (WebSocketDisconnect, Exception):
             pass
 
@@ -114,9 +127,10 @@ async def playground_ws(websocket: WebSocket, session_id: str):
         try:
             while True:
                 text = await websocket.receive_text()
-                r.rpush(_commands_list(session_id), text)
-                # Acknowledge immediately
-                await websocket.send_text(json.dumps({
+                await asyncio.to_thread(
+                    r.rpush, _commands_list(session_id), text
+                )
+                await _safe_send(json.dumps({
                     "type": "command_ack",
                     "received": True,
                 }))
