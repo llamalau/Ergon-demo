@@ -56,19 +56,32 @@ def encode_video(frames: list[np.ndarray], fps: int = 30) -> bytes | None:
         return None
 
     try:
-        import imageio.v3 as iio
+        import os
+        import tempfile
 
-        buf = io.BytesIO()
-        # Write frames to MP4
-        with iio.imopen(buf, "w", plugin="pyav") as writer:
-            writer.init_video_stream("libx264", fps=fps)
+        import imageio
+
+        # imageio-ffmpeg requires writing to a file path (not BytesIO)
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as tmp:
+            tmp_path = tmp.name
+
+        try:
+            writer = imageio.get_writer(
+                tmp_path, fps=fps, codec="libx264",
+                output_params=["-pix_fmt", "yuv420p"],
+            )
             for frame in frames:
                 if frame.dtype != np.uint8:
                     frame = (frame * 255).astype(np.uint8)
-                writer.write_frame(frame)
+                writer.append_data(frame)
+            writer.close()
 
-        buf.seek(0)
-        return buf.getvalue()
-    except Exception:
-        # Fallback: return None if video encoding fails
+            with open(tmp_path, "rb") as f:
+                return f.read()
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning("Video encoding failed: %s", e)
         return None
