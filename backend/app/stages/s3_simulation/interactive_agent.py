@@ -26,6 +26,11 @@ _HOME_WRIST = [0.0, -0.3, 0.0]
 _OPEN_FINGERS = {"thumb": 0.0, "index": 0.0, "middle": 0.0,
                  "ring": 0.0, "pinky": 0.0}
 
+# Convergence: max error (radians) between commanded and actual actuator positions
+_CONVERGENCE_THRESHOLD = 0.05
+# Safety timeout so the robot doesn't get stuck waiting forever
+_MAX_CONVERGENCE_WAIT = 300
+
 
 class InteractiveAgent:
     """Executes VLM-generated motion plans.
@@ -49,8 +54,8 @@ class InteractiveAgent:
         self._plan: MotionPlan | None = None
         self._current_step_idx: int = 0
         self._step_progress: int = 0
-        self._settling: bool = False
-        self._settle_progress: int = 0
+        self._waiting_for_convergence: bool = False
+        self._convergence_wait: int = 0
         self._prev_ee: np.ndarray = _HOME_POS.copy()
         self._prev_wrist: list[float] = list(_HOME_WRIST)
         self._prev_fingers: dict[str, float] = dict(_OPEN_FINGERS)
@@ -131,23 +136,30 @@ class InteractiveAgent:
         elif self.phase == "executing":
             current_step = self._plan.steps[self._current_step_idx]
 
-            if self._settling:
-                # Hold final target pose so physics can converge
+            if self._waiting_for_convergence:
+                # Keep commanding the final target and check if robot
+                # has physically reached it
                 self._apply_pose(
                     action,
                     np.array(current_step.ee_target),
                     list(current_step.wrist_orientation),
                     dict(current_step.finger_config),
                 )
-                self._settle_progress += 1
+                self._convergence_wait += 1
 
-                # Settle for 30% of step duration (min 15, max 60 steps)
-                settle_duration = max(15, min(60,
-                                              int(current_step.duration_steps * 0.3)))
-                if self._settle_progress >= settle_duration:
-                    # Done settling — advance to next step
-                    self._settling = False
-                    self._settle_progress = 0
+                converged = self._check_convergence(action, data)
+                timed_out = self._convergence_wait >= _MAX_CONVERGENCE_WAIT
+
+                if timed_out and not converged:
+                    logger.warning(
+                        "Step %d/%d did not converge after %d steps, advancing",
+                        self._current_step_idx + 1, len(self._plan.steps),
+                        _MAX_CONVERGENCE_WAIT,
+                    )
+
+                if converged or timed_out:
+                    self._waiting_for_convergence = False
+                    self._convergence_wait = 0
                     self._prev_ee = np.array(current_step.ee_target)
                     self._prev_wrist = list(current_step.wrist_orientation)
                     self._prev_fingers = dict(current_step.finger_config)
@@ -185,10 +197,10 @@ class InteractiveAgent:
                 self._apply_pose(action, ee, wrist, fingers)
                 self._step_progress += 1
 
-                # When interpolation is done, enter settling phase
+                # When interpolation is done, wait for physics to converge
                 if self._step_progress >= current_step.duration_steps:
-                    self._settling = True
-                    self._settle_progress = 0
+                    self._waiting_for_convergence = True
+                    self._convergence_wait = 0
 
         self.phase_step += 1
         return action
@@ -204,6 +216,22 @@ class InteractiveAgent:
         finger_joints = self.ik.compute_finger_joints(fingers, "medium")
         self.ik.apply(action, arm_joints)
         self.ik.apply(action, finger_joints)
+
+    def _check_convergence(self, action: np.ndarray, data) -> bool:
+        """Check if the robot's actual actuator positions match commanded targets.
+
+        Compares the action array (desired ctrl values) against
+        data.actuator_length (actual actuator positions from physics).
+        Returns True when all controlled actuators are within threshold.
+        """
+        controlled_indices = list(self.ik._actuator_map.values())
+        if not controlled_indices:
+            return True
+        errors = np.abs(
+            action[controlled_indices] - data.actuator_length[controlled_indices]
+        )
+        max_error = np.max(errors)
+        return max_error < _CONVERGENCE_THRESHOLD
 
     def _set_phase(self, phase: str, message: str) -> None:
         self.phase = phase
