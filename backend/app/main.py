@@ -6,10 +6,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app.core.config import settings
-from app.core.database import engine
+from app.core.database import engine, Base
 from app.core.logging import setup_logging, get_logger
 from app.api.v1.router import api_router
 from app.services.storage import ensure_bucket, check_minio_health
+import app.models  # noqa: F401 — register all models with Base.metadata
 
 setup_logging()
 log = get_logger("ergon")
@@ -17,8 +18,6 @@ log = get_logger("ergon")
 
 async def _create_tables():
     """Create all database tables if they don't exist."""
-    from app.core.database import Base
-    from app.models import *  # noqa: F401,F403 — ensure all models registered
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
 
