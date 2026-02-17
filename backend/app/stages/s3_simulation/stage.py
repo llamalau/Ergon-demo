@@ -1,12 +1,21 @@
 import json
 
 from app.tasks.base_stage import BaseStage
+from app.core.config import settings
 from app.services.storage import download_file, upload_file
 from app.stages.s3_simulation.sim_runner import run_simulation
 from app.stages.s3_simulation.scripted_agent import ScriptedAgent
 from app.stages.s3_simulation.recorder import save_telemetry, encode_video
 
 TASK_TYPES = ["grasp", "reorient", "use", "transfer"]
+
+
+def create_agent(agent_type: str, config: dict):
+    """Create the appropriate agent based on configuration."""
+    if agent_type == "vla" and getattr(settings, "VLM_API_KEY", ""):
+        from app.stages.s3_simulation.vla_agent import VLMAgent
+        return VLMAgent(config)
+    return ScriptedAgent()
 
 
 class SimulationStage(BaseStage):
@@ -30,6 +39,17 @@ class SimulationStage(BaseStage):
 
         return assets
 
+    def _download_robot_assets(self, context: dict) -> dict[str, bytes]:
+        """Download robot mesh assets from MinIO."""
+        assets = {}
+        robot_mesh_keys = context.get("robot_mesh_keys", {})
+        for rel_path, storage_key in robot_mesh_keys.items():
+            try:
+                assets[rel_path] = download_file(storage_key)
+            except Exception:
+                pass  # Non-critical: fallback hand has no mesh assets
+        return assets
+
     def run(self, context: dict) -> dict:
         job_id = context["job_id"]
         mjcf_key = context.get("mjcf_key", "")
@@ -37,11 +57,13 @@ class SimulationStage(BaseStage):
         self.publish_progress(0.05, "Loading MJCF model and meshes")
         mjcf_xml = download_file(mjcf_key).decode()
         mesh_assets = self._download_mesh_assets(context)
+        robot_assets = self._download_robot_assets(context)
 
         # Run simulation trials for each task type
         config = context.get("config", {})
         task_types = config.get("task_types", ["grasp", "reorient"])
         num_trials = config.get("num_trials", 1)
+        agent_type = config.get("agent_type", "scripted")
 
         all_results = []
         total_work = len(task_types) * num_trials
@@ -52,7 +74,7 @@ class SimulationStage(BaseStage):
                 progress = 0.1 + 0.8 * (completed / max(total_work, 1))
                 self.publish_progress(progress, f"Running {task_type} trial {trial + 1}")
 
-                agent = ScriptedAgent()
+                agent = create_agent(agent_type, config)
                 task_config = {
                     "task_type": task_type,
                     "trial_index": trial,
@@ -66,6 +88,7 @@ class SimulationStage(BaseStage):
                     max_steps=task_config["max_steps"],
                     render=True,
                     assets=mesh_assets,
+                    robot_assets=robot_assets,
                 )
 
                 # Save telemetry
@@ -100,6 +123,8 @@ class SimulationStage(BaseStage):
             "num_trials": len(all_results),
             "tasks_run": list(set(r["task_type"] for r in all_results)),
             "overall_success_rate": sum(1 for r in all_results if r["success"].get("success", False)) / max(len(all_results), 1),
+            "agent_type": agent_type,
+            "video_keys": [r["video_key"] for r in all_results if r["video_key"]],
         }
 
         return context

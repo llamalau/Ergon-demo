@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     CELERY_BROKER_URL: str = "redis://redis:6379/0"
     CELERY_RESULT_BACKEND: str = "redis://redis:6379/1"
 
+    # VLM (Vision-Language Model) for VLA agent
+    VLM_PROVIDER: str = ""  # "anthropic" or "openai"; empty = disabled
+    VLM_API_KEY: str = ""
+    VLM_MODEL: str = "claude-sonnet-4-5-20250929"
+
     # Security
     SECRET_KEY: str = "change-me-in-production"
     BACKEND_CORS_ORIGINS: list[str] = [

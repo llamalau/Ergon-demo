@@ -78,6 +78,17 @@ export interface Job {
   stages: JobStage[];
 }
 
+export interface VideoInfo {
+  task_type: string;
+  trial_index: number;
+  filename: string;
+  video_url: string;
+}
+
+export async function getJobVideos(jobId: string): Promise<VideoInfo[]> {
+  return apiGet<VideoInfo[]>(`/jobs/${jobId}/videos`);
+}
+
 export interface Report {
   id: string;
   job_id: string;

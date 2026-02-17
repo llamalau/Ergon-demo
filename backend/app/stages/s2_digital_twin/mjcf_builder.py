@@ -2,6 +2,12 @@
 
 from lxml import etree
 
+from app.stages.s3_simulation.robot_loader import (
+    load_shadow_hand,
+    get_arm_xml,
+    get_arm_actuators_xml,
+)
+
 
 def build_mjcf(
     model_name: str,
@@ -12,8 +18,11 @@ def build_mjcf(
     visual_mesh_file: str,
     center_of_mass: list[float],
     environment: str = "open_space",
-) -> str:
-    """Build a complete MJCF XML string for the object + environment + robot."""
+) -> tuple[str, dict[str, bytes]]:
+    """Build a complete MJCF XML string for the object + environment + robot.
+
+    Returns (mjcf_xml_string, robot_mesh_assets_dict).
+    """
 
     root = etree.Element("mujoco", model=model_name)
 
@@ -21,7 +30,7 @@ def build_mjcf(
     etree.SubElement(root, "compiler", angle="radian", meshdir="meshes")
 
     # Options
-    option = etree.SubElement(root, "option", timestep="0.002", gravity="0 0 -9.81")
+    etree.SubElement(root, "option", timestep="0.002", gravity="0 0 -9.81")
 
     # Visual settings
     visual = etree.SubElement(root, "visual")
@@ -43,12 +52,29 @@ def build_mjcf(
     for i, f in enumerate(collision_mesh_files):
         etree.SubElement(asset, "mesh", name=f"object_collision_{i}", file=f)
 
+    # Load Shadow Hand model
+    hand_body_xml, hand_actuator_xml, hand_asset_xml, robot_mesh_assets = (
+        load_shadow_hand()
+    )
+
+    # Insert hand asset definitions (mesh refs, materials, etc.)
+    if hand_asset_xml.strip():
+        try:
+            wrapped = f"<root>{hand_asset_xml}</root>"
+            hand_asset_tree = etree.fromstring(wrapped)
+            for child in hand_asset_tree:
+                asset.append(child)
+        except etree.XMLSyntaxError:
+            pass  # Skip malformed asset XML
+
     # Worldbody
     worldbody = etree.SubElement(root, "worldbody")
 
-    # Light
+    # Lights
     etree.SubElement(worldbody, "light", name="top_light",
                      pos="0 0 2.5", dir="0 0 -1", diffuse="0.8 0.8 0.8")
+    etree.SubElement(worldbody, "light", name="front_light",
+                     pos="1 -1 1.5", dir="-0.5 0.5 -0.5", diffuse="0.5 0.5 0.5")
 
     # Ground
     etree.SubElement(worldbody, "geom", name="ground", type="plane",
@@ -57,6 +83,11 @@ def build_mjcf(
 
     # Environment elements
     _add_environment(worldbody, environment)
+
+    # Overview camera (for recorded video)
+    etree.SubElement(worldbody, "camera", name="overview_cam",
+                     pos="1.2 -0.8 1.0", xyaxes="0.6 0.8 0 -0.3 0.2 0.9",
+                     fovy="60")
 
     # Target object body
     obj_body = etree.SubElement(worldbody, "body", name="object",
@@ -87,14 +118,64 @@ def build_mjcf(
                          solimp=solimp_str,
                          condim=str(contact_params["condim"]))
 
-    # Robot placeholder (Franka Panda to be included via include)
-    robot_body = etree.SubElement(worldbody, "body", name="robot_mount",
-                                  pos="0 0 0")
-    etree.SubElement(robot_body, "geom", name="robot_base", type="cylinder",
-                     size="0.06 0.05", rgba="0.3 0.3 0.3 1")
+    # Robot: 7-DOF arm with Shadow Hand attached at end-effector
+    arm_xml = get_arm_xml()
+    try:
+        arm_tree = etree.fromstring(f"<root>{arm_xml}</root>")
+        # Find the end_effector body and attach the hand
+        for arm_body in arm_tree:
+            worldbody.append(arm_body)
+            # Find end_effector within the arm tree and attach hand
+            ee = arm_body.find(".//body[@name='end_effector']")
+            if ee is not None and hand_body_xml.strip():
+                try:
+                    hand_tree = etree.fromstring(f"<root>{hand_body_xml}</root>")
+                    for hand_child in hand_tree:
+                        ee.append(hand_child)
+                except etree.XMLSyntaxError:
+                    pass
+                # Add wrist-mounted camera
+                etree.SubElement(ee, "camera", name="wrist_cam",
+                                 pos="0 0 0.05", xyaxes="1 0 0 0 -1 0",
+                                 fovy="90")
+    except etree.XMLSyntaxError:
+        # Fallback: just add a static robot base
+        robot_body = etree.SubElement(worldbody, "body", name="robot_mount",
+                                      pos="0 0 0")
+        etree.SubElement(robot_body, "geom", name="robot_base", type="cylinder",
+                         size="0.06 0.05", rgba="0.3 0.3 0.3 1")
 
-    return etree.tostring(root, pretty_print=True, xml_declaration=True,
-                          encoding="utf-8").decode()
+    # Actuators section
+    actuator_el = etree.SubElement(root, "actuator")
+
+    # Arm actuators
+    arm_act_xml = get_arm_actuators_xml()
+    try:
+        arm_act_tree = etree.fromstring(f"<root>{arm_act_xml}</root>")
+        for act in arm_act_tree:
+            actuator_el.append(act)
+    except etree.XMLSyntaxError:
+        pass
+
+    # Hand actuators
+    if hand_actuator_xml.strip():
+        try:
+            hand_act_tree = etree.fromstring(f"<root>{hand_actuator_xml}</root>")
+            for act in hand_act_tree:
+                actuator_el.append(act)
+        except etree.XMLSyntaxError:
+            pass
+
+    # Sensors for fingertip contact
+    sensor = etree.SubElement(root, "sensor")
+    for finger in ["thumb", "index", "middle", "ring", "pinky"]:
+        etree.SubElement(sensor, "touch", name=f"{finger}_touch",
+                         site=f"{finger}_tip")
+
+    xml_str = etree.tostring(root, pretty_print=True, xml_declaration=True,
+                             encoding="utf-8").decode()
+
+    return xml_str, robot_mesh_assets
 
 
 def _add_environment(worldbody, environment: str):

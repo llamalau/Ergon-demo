@@ -6,12 +6,14 @@ import MetricsChart from "../components/MetricsChart";
 import RecommendationList from "../components/RecommendationList";
 import HeatmapOverlay from "../components/HeatmapOverlay";
 import ExportButton from "../components/ExportButton";
-import { apiGet, type Report } from "../lib/api";
+import SimulationPlayer from "../components/SimulationPlayer";
+import { apiGet, getJobVideos, type Report, type VideoInfo } from "../lib/api";
 
 export default function ReportPage() {
   const { jobId } = useParams<{ jobId: string }>();
   const [report, setReport] = useState<Report | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [videos, setVideos] = useState<VideoInfo[]>([]);
 
   useEffect(() => {
     if (!jobId) return;
@@ -20,6 +22,9 @@ export default function ReportPage() {
       .catch((e) =>
         setError(e instanceof Error ? e.message : "Failed to load report")
       );
+    getJobVideos(jobId)
+      .then(setVideos)
+      .catch(() => {});
   }, [jobId]);
 
   if (error) {
@@ -41,6 +46,9 @@ export default function ReportPage() {
       </AppShell>
     );
   }
+
+  // Show the first video as a summary, or null if none available
+  const summaryVideo = videos.length > 0 ? videos[0] : null;
 
   return (
     <AppShell>
@@ -73,6 +81,18 @@ export default function ReportPage() {
             />
           ))}
         </div>
+
+        {summaryVideo && (
+          <div className="mb-8">
+            <h2 className="text-lg font-semibold text-white mb-4">
+              Simulation Preview
+            </h2>
+            <SimulationPlayer
+              videoUrl={summaryVideo.video_url}
+              title={`${summaryVideo.task_type} — Trial ${summaryVideo.trial_index + 1}`}
+            />
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
           <HeatmapOverlay glbUrl={null} />

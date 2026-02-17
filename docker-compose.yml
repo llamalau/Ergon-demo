@@ -94,6 +94,9 @@ services:
     env_file: .env
     environment:
       - MUJOCO_GL=osmesa
+      - VLM_PROVIDER=${VLM_PROVIDER:-}
+      - VLM_API_KEY=${VLM_API_KEY:-}
+      - VLM_MODEL=${VLM_MODEL:-claude-sonnet-4-5-20250929}
     depends_on:
       postgres:
         condition: service_healthy

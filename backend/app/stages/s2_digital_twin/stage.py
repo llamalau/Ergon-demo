@@ -41,9 +41,9 @@ class DigitalTwinStage(BaseStage):
         material = properties.get("material", "default")
         contact = compute_contact_params(material, properties.get("friction"))
 
-        self.publish_progress(0.8, "Building MJCF model")
+        self.publish_progress(0.8, "Building MJCF model with Shadow Hand")
         model_name = f"ergon_object_{job_id[:8]}"
-        mjcf_xml = build_mjcf(
+        mjcf_xml, robot_mesh_assets = build_mjcf(
             model_name=model_name,
             mass=mass,
             inertia=inertia,
@@ -57,9 +57,17 @@ class DigitalTwinStage(BaseStage):
         mjcf_key = f"jobs/{job_id}/model.xml"
         upload_file(mjcf_key, mjcf_xml.encode(), "application/xml")
 
+        # Upload robot mesh assets to MinIO
+        robot_mesh_keys = {}
+        for rel_path, mesh_bytes in robot_mesh_assets.items():
+            asset_key = f"jobs/{job_id}/robot_meshes/{rel_path}"
+            upload_file(asset_key, mesh_bytes, "application/octet-stream")
+            robot_mesh_keys[rel_path] = asset_key
+
         context["mjcf_key"] = mjcf_key
         context["visual_mesh_key"] = visual_key
         context["collision_mesh_keys"] = collision_keys
+        context["robot_mesh_keys"] = robot_mesh_keys
         context["inertia"] = inertia
         context["contact_params"] = contact
         context["stage_result"] = {
@@ -67,6 +75,7 @@ class DigitalTwinStage(BaseStage):
             "environment": environment,
             "num_collision_parts": collision_result["num_collision_parts"],
             "inertia_diagonal": [inertia["ixx"], inertia["iyy"], inertia["izz"]],
+            "robot_type": "shadow_hand_7dof_arm",
         }
 
         return context

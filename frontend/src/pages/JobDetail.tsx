@@ -3,13 +3,15 @@ import { useParams, Link } from "react-router-dom";
 import AppShell from "../components/AppShell";
 import PipelineTracker from "../components/PipelineTracker";
 import LogStream from "../components/LogStream";
-import { apiGet, type Job } from "../lib/api";
+import SimulationPlayer from "../components/SimulationPlayer";
+import { apiGet, getJobVideos, type Job, type VideoInfo } from "../lib/api";
 import { useJobProgress } from "../hooks/useJobProgress";
 
 export default function JobDetail() {
   const { jobId } = useParams<{ jobId: string }>();
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [videos, setVideos] = useState<VideoInfo[]>([]);
   const progressEvents = useJobProgress(jobId || null);
 
   useEffect(() => {
@@ -26,6 +28,17 @@ export default function JobDetail() {
     const interval = setInterval(poll, 3000);
     return () => clearInterval(interval);
   }, [jobId]);
+
+  // Fetch videos when simulation stage completes
+  useEffect(() => {
+    if (!jobId || !job) return;
+    const simStage = job.stages.find((s) => s.stage_name === "simulation");
+    if (simStage?.status === "completed") {
+      getJobVideos(jobId)
+        .then(setVideos)
+        .catch(() => {}); // silently ignore if no videos
+    }
+  }, [jobId, job?.stages]);
 
   return (
     <AppShell>
@@ -68,6 +81,23 @@ export default function JobDetail() {
             </div>
 
             <PipelineTracker stages={job.stages} />
+
+            {videos.length > 0 && (
+              <div>
+                <h2 className="text-lg font-semibold text-white mb-4">
+                  Simulation Videos
+                </h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {videos.map((v) => (
+                    <SimulationPlayer
+                      key={v.filename}
+                      videoUrl={v.video_url}
+                      title={`${v.task_type} — Trial ${v.trial_index + 1}`}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div>
               <h2 className="text-lg font-semibold text-white mb-4">Logs</h2>
