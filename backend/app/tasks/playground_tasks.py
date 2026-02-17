@@ -53,22 +53,23 @@ def run_interactive_sim(self, session_id: str, job_id: str) -> dict:
     logger.info("Downloading MJCF and assets for playground session %s", session_id)
     mjcf_xml = download_file(mjcf_key).decode()
 
-    # Download mesh assets (same pattern as SimulationStage)
+    # Mesh keys are not stored in result_data — derive from job_id
+    # using the same key pattern as DigitalTwinStage
     assets: dict[str, bytes] = {}
 
-    visual_key = result_data.get("visual_mesh_key", "")
-    if visual_key:
+    visual_key = f"jobs/{job_id}/meshes/visual.stl"
+    try:
         assets["meshes/visual.stl"] = download_file(visual_key)
+    except Exception:
+        logger.warning("Could not download visual mesh: %s", visual_key)
 
-    for i, key in enumerate(result_data.get("collision_mesh_keys", [])):
-        assets[f"meshes/collision_{i}.stl"] = download_file(key)
-
-    robot_mesh_keys = result_data.get("robot_mesh_keys", {})
-    for rel_path, storage_key in robot_mesh_keys.items():
+    num_collision = result_data.get("num_collision_parts", 0)
+    for i in range(num_collision):
+        col_key = f"jobs/{job_id}/meshes/collision_{i}.stl"
         try:
-            assets[rel_path] = download_file(storage_key)
+            assets[f"meshes/collision_{i}.stl"] = download_file(col_key)
         except Exception:
-            pass
+            logger.warning("Could not download collision mesh: %s", col_key)
 
     # --- Run interactive simulation ---
     from app.stages.s3_simulation.interactive_runner import run_interactive_simulation
