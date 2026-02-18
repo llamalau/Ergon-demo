@@ -1,5 +1,4 @@
 from app.schemas.job import JobCreate, JobResponse, JobStageResponse
-from app.schemas.report import ReportResponse
 from app.schemas.upload import UploadResponse
 
 __all__ = [
@@ -7,5 +6,4 @@ __all__ = [
     "JobCreate",
     "JobResponse",
     "JobStageResponse",
-    "ReportResponse",
 ]

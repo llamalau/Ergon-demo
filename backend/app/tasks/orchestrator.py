@@ -53,7 +53,6 @@ def run_stage(self, context: dict, stage_index: int) -> dict:
     _update_stage_status(job_id, stage_name, StageStatus.RUNNING)
 
     try:
-        # Import and run the actual stage
         stage_class = _get_stage_class(stage_name)
         stage = stage_class(job_id)
         result = stage.execute(context)
@@ -97,13 +96,12 @@ def start_pipeline(job_id: str) -> dict:
     _update_job_status(job_id, JobStatus.RUNNING)
     context = _get_job_context(job_id)
 
-    # Build a chain of 5 stages
+    # 4-stage pipeline: Ingest -> Digital Twin -> Simulation (with retry) -> Analysis
     pipeline = chain(
         run_stage.s(0),  # CAD Ingestion
-        run_stage.s(1),  # Digital Twin
-        run_stage.s(2),  # Simulation
-        run_stage.s(3),  # Analysis
-        run_stage.s(4),  # Report
+        run_stage.s(1),  # Digital Twin (build MJCF with G1 humanoid)
+        run_stage.s(2),  # Simulation (two-level agent, retry loop)
+        run_stage.s(3),  # Analysis (minimal success/failure summary)
     )
 
     result = pipeline.apply_async(args=[context])
@@ -123,13 +121,11 @@ def _get_stage_class(stage_name: str):
     from app.stages.s2_digital_twin.stage import DigitalTwinStage
     from app.stages.s3_simulation.stage import SimulationStage
     from app.stages.s4_analysis.stage import AnalysisStage
-    from app.stages.s5_report.stage import ReportStage
 
     stages = {
         "cad_ingestion": IngestionStage,
         "digital_twin": DigitalTwinStage,
         "simulation": SimulationStage,
         "analysis": AnalysisStage,
-        "report": ReportStage,
     }
     return stages[stage_name]

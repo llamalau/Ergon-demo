@@ -9,6 +9,7 @@ from app.models.job import JobStatus, StageStatus
 class JobCreate(BaseModel):
     upload_id: uuid.UUID
     environment: str = "open_space"
+    task_description: str = "pick up the object"
     config: dict | None = None
 
 

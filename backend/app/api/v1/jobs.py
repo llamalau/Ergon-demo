@@ -26,10 +26,14 @@ async def create_job(body: JobCreate, db: AsyncSession = Depends(get_db)):
     if not result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Upload not found")
 
+    # Merge task_description into config so the pipeline can access it
+    job_config = body.config or {}
+    job_config.setdefault("task_description", body.task_description)
+
     job = Job(
         upload_id=body.upload_id,
         environment=body.environment,
-        config=body.config,
+        config=job_config,
     )
     db.add(job)
     await db.flush()

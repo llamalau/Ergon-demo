@@ -1,11 +1,16 @@
-"""Programmatic MJCF XML generation for simulation."""
+"""Programmatic MJCF XML generation for humanoid manipulation scenes.
+
+Composes a scene with the Unitree G1 humanoid (from MuJoCo Menagerie)
+and a target object, with environment elements and cameras.
+"""
 
 from lxml import etree
 
-from app.stages.s3_simulation.robot_loader import (
-    load_shadow_hand,
-    get_arm_xml,
-    get_arm_actuators_xml,
+from app.stages.s3_simulation.humanoid_loader import (
+    get_g1_model_path,
+    get_g1_asset_dir,
+    CAMERA_CONFIGS,
+    BODY_NAMES,
 )
 
 
@@ -21,28 +26,34 @@ def build_mjcf(
     object_position: list[float] | None = None,
     robot_position: list[float] | None = None,
 ) -> tuple[str, dict[str, bytes]]:
-    """Build a complete MJCF XML string for the object + environment + robot.
+    """Build a complete MJCF XML string for G1 humanoid + object + environment.
 
-    Returns (mjcf_xml_string, robot_mesh_assets_dict).
+    The G1 model is included via <include>, not generated procedurally.
+
+    Returns (mjcf_xml_string, empty_assets_dict).
+    The G1 meshes are loaded from disk by MuJoCo via the meshdir compiler
+    setting, so no robot mesh assets need to be passed as binary blobs.
     """
     if object_position is None:
-        object_position = [0.5, 0, 0.3]
+        object_position = [0.65, 0, 0.78]  # On table, in front of robot
     if robot_position is None:
-        robot_position = [0.0, 0, 0.5]
+        robot_position = [0.0, 0, 0.0]
 
     root = etree.Element("mujoco", model=model_name)
 
-    # Compiler settings
+    # Compiler: angle in radian, meshdir for object meshes
+    # The G1 model has its own meshdir set in the included file
     etree.SubElement(root, "compiler", angle="radian", meshdir="meshes")
 
     # Options
-    etree.SubElement(root, "option", timestep="0.002", gravity="0 0 -9.81")
+    etree.SubElement(root, "option", timestep="0.002", gravity="0 0 -9.81",
+                     integrator="implicitfast")
 
     # Visual settings
     visual = etree.SubElement(root, "visual")
     etree.SubElement(visual, "global", offwidth="1280", offheight="720")
 
-    # Assets
+    # Assets - textures and materials for environment/object
     asset = etree.SubElement(root, "asset")
     etree.SubElement(asset, "texture", type="2d", name="grid", builtin="checker",
                      rgb1="0.2 0.2 0.2", rgb2="0.3 0.3 0.3", width="512", height="512")
@@ -51,27 +62,16 @@ def build_mjcf(
     etree.SubElement(asset, "material", name="object_mat",
                      rgba="0.4 0.6 0.9 1.0", specular="0.5", shininess="0.5")
 
-    # Visual mesh
+    # Object meshes
     etree.SubElement(asset, "mesh", name="object_visual", file=visual_mesh_file)
-
-    # Collision meshes
     for i, f in enumerate(collision_mesh_files):
         etree.SubElement(asset, "mesh", name=f"object_collision_{i}", file=f)
 
-    # Load Shadow Hand model
-    hand_body_xml, hand_actuator_xml, hand_asset_xml, robot_mesh_assets = (
-        load_shadow_hand()
-    )
-
-    # Insert hand asset definitions (mesh refs, materials, etc.)
-    if hand_asset_xml.strip():
-        try:
-            wrapped = f"<root>{hand_asset_xml}</root>"
-            hand_asset_tree = etree.fromstring(wrapped)
-            for child in hand_asset_tree:
-                asset.append(child)
-        except etree.XMLSyntaxError:
-            pass  # Skip malformed asset XML
+    # Include the G1 humanoid model from Menagerie
+    # MuJoCo resolves the include relative to the main file, so we use
+    # an absolute path. The G1 model defines its own meshdir for its assets.
+    g1_path = str(get_g1_model_path())
+    etree.SubElement(root, "include", file=g1_path)
 
     # Worldbody
     worldbody = etree.SubElement(root, "worldbody")
@@ -85,14 +85,16 @@ def build_mjcf(
     # Ground
     etree.SubElement(worldbody, "geom", name="ground", type="plane",
                      size="2 2 0.01", material="grid_mat",
-                     friction=f"{contact_params['friction'][0]} {contact_params['friction'][1]} {contact_params['friction'][2]}")
+                     friction=f"{contact_params['friction'][0]} "
+                              f"{contact_params['friction'][1]} "
+                              f"{contact_params['friction'][2]}")
 
-    # Environment elements
+    # Environment elements (table, etc.)
     _add_environment(worldbody, environment)
 
-    # Overview camera (for recorded video)
+    # Overview camera (fixed world position, for video recording and planner)
     etree.SubElement(worldbody, "camera", name="overview_cam",
-                     pos="1.2 -0.8 1.0", xyaxes="0.6 0.8 0 -0.3 0.2 0.9",
+                     pos="1.5 -1.0 1.5", xyaxes="0.6 0.8 0 -0.3 0.2 0.9",
                      fovy="60")
 
     # Target object body
@@ -125,65 +127,29 @@ def build_mjcf(
                          solimp=solimp_str,
                          condim=str(contact_params["condim"]))
 
-    # Robot: 7-DOF arm with Shadow Hand attached at end-effector
-    robot_pos_str = " ".join(str(v) for v in robot_position)
-    arm_xml = get_arm_xml(base_pos=robot_pos_str)
-    try:
-        arm_tree = etree.fromstring(f"<root>{arm_xml}</root>")
-        # Find the end_effector body and attach the hand
-        for arm_body in arm_tree:
-            worldbody.append(arm_body)
-            # Find end_effector within the arm tree and attach hand
-            ee = arm_body.find(".//body[@name='end_effector']")
-            if ee is not None and hand_body_xml.strip():
-                try:
-                    hand_tree = etree.fromstring(f"<root>{hand_body_xml}</root>")
-                    for hand_child in hand_tree:
-                        ee.append(hand_child)
-                except etree.XMLSyntaxError:
-                    pass
-                # Add wrist-mounted camera
-                etree.SubElement(ee, "camera", name="wrist_cam",
-                                 pos="0 0 0.05", xyaxes="1 0 0 0 -1 0",
-                                 fovy="90")
-    except etree.XMLSyntaxError:
-        # Fallback: just add a static robot base
-        robot_body = etree.SubElement(worldbody, "body", name="robot_mount",
-                                      pos="0 0 0")
-        etree.SubElement(robot_body, "geom", name="robot_base", type="cylinder",
-                         size="0.06 0.05", rgba="0.3 0.3 0.3 1")
+    # NOTE: Ego and wrist cameras are attached to the G1's body hierarchy.
+    # We add them as top-level elements that MuJoCo will attach to the
+    # included G1 bodies via the body="..." attribute.
+    # However, <camera> elements in worldbody cannot reference included bodies
+    # directly. Instead, we'll add them programmatically after model load
+    # via the CameraManager, or define them in the MJCF using the <body>
+    # attachment mechanism below.
 
-    # Actuators section
-    actuator_el = etree.SubElement(root, "actuator")
-
-    # Arm actuators
-    arm_act_xml = get_arm_actuators_xml()
-    try:
-        arm_act_tree = etree.fromstring(f"<root>{arm_act_xml}</root>")
-        for act in arm_act_tree:
-            actuator_el.append(act)
-    except etree.XMLSyntaxError:
-        pass
-
-    # Hand actuators
-    if hand_actuator_xml.strip():
-        try:
-            hand_act_tree = etree.fromstring(f"<root>{hand_actuator_xml}</root>")
-            for act in hand_act_tree:
-                actuator_el.append(act)
-        except etree.XMLSyntaxError:
-            pass
-
-    # Sensors for fingertip contact
-    sensor = etree.SubElement(root, "sensor")
-    for finger in ["thumb", "index", "middle", "ring", "pinky"]:
-        etree.SubElement(sensor, "touch", name=f"{finger}_touch",
-                         site=f"{finger}_tip")
+    # We place cameras in dedicated wrapper bodies that we position
+    # at the robot location. The CameraManager will look them up by name.
+    # The ego cam is defined as a world-fixed camera approximating head view.
+    robot_pos = robot_position or [0.0, 0, 0.0]
+    ego_pos = f"{robot_pos[0] + 0.15} {robot_pos[1]} {robot_pos[2] + 1.1}"
+    etree.SubElement(worldbody, "camera", name="ego_cam",
+                     pos=ego_pos,
+                     xyaxes="0 -1 0 0.3 0 1",
+                     fovy="90")
 
     xml_str = etree.tostring(root, pretty_print=True, xml_declaration=True,
                              encoding="utf-8").decode()
 
-    return xml_str, robot_mesh_assets
+    # No robot mesh assets to return - G1 loads from its own meshdir
+    return xml_str, {}
 
 
 def _add_environment(worldbody, environment: str):
@@ -201,37 +167,33 @@ def _add_environment(worldbody, environment: str):
 
 def _env_kitchen(worldbody):
     """Kitchen environment with table and cabinet."""
-    table = etree.SubElement(worldbody, "body", name="table", pos="0.5 0 0.35")
-    etree.SubElement(table, "geom", type="box", size="0.4 0.3 0.02",
+    # Table positioned for G1 standing (table height ~0.75m)
+    table = etree.SubElement(worldbody, "body", name="table", pos="0.6 0 0.375")
+    etree.SubElement(table, "geom", type="box", size="0.4 0.3 0.375",
                      rgba="0.6 0.4 0.2 1", friction="0.5 0.005 0.0001")
-    leg_positions = [("0.35 -0.25 -0.17",), ("0.35 0.25 -0.17",),
-                     ("0.65 -0.25 -0.17",), ("0.65 0.25 -0.17",)]
-    for i, (pos,) in enumerate(leg_positions):
-        etree.SubElement(table, "geom", name=f"table_leg_{i}", type="cylinder",
-                         pos=pos, size="0.02 0.17", rgba="0.6 0.4 0.2 1")
 
 
 def _env_workshop(worldbody):
     """Workshop with workbench."""
-    bench = etree.SubElement(worldbody, "body", name="workbench", pos="0.5 0 0.4")
-    etree.SubElement(bench, "geom", type="box", size="0.6 0.4 0.03",
+    bench = etree.SubElement(worldbody, "body", name="workbench", pos="0.6 0 0.4")
+    etree.SubElement(bench, "geom", type="box", size="0.6 0.4 0.4",
                      rgba="0.5 0.5 0.5 1", friction="0.6 0.005 0.0001")
 
 
 def _env_vehicle(worldbody):
     """Vehicle interior surface."""
-    surface = etree.SubElement(worldbody, "body", name="dashboard", pos="0.5 0 0.3")
-    etree.SubElement(surface, "geom", type="box", size="0.5 0.3 0.02",
+    surface = etree.SubElement(worldbody, "body", name="dashboard", pos="0.6 0 0.35")
+    etree.SubElement(surface, "geom", type="box", size="0.5 0.3 0.35",
                      rgba="0.2 0.2 0.2 1", friction="0.4 0.005 0.0001")
 
 
 def _env_operating_room(worldbody):
     """Operating room with sterile table."""
-    table = etree.SubElement(worldbody, "body", name="surgical_table", pos="0.5 0 0.45")
-    etree.SubElement(table, "geom", type="box", size="0.5 0.3 0.02",
+    table = etree.SubElement(worldbody, "body", name="surgical_table", pos="0.6 0 0.425")
+    etree.SubElement(table, "geom", type="box", size="0.5 0.3 0.425",
                      rgba="0.9 0.9 0.95 1", friction="0.3 0.005 0.0001")
 
 
 def _env_open_space(worldbody):
-    """Open space — minimal environment, just the ground plane."""
+    """Open space -- minimal environment, just the ground plane."""
     pass  # Ground already added

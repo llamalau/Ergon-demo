@@ -29,7 +29,6 @@ STAGE_NAMES = [
     "digital_twin",
     "simulation",
     "analysis",
-    "report",
 ]
 
 

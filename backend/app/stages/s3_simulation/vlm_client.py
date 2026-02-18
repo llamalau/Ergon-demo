@@ -12,7 +12,7 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-SCENE_ANALYSIS_PROMPT = """You are a robotic manipulation planner. You are controlling a Shadow Hand (5-finger dexterous hand) mounted on a 7-DOF arm.
+SCENE_ANALYSIS_PROMPT = """You are a robotic manipulation planner. You are controlling a Unitree G1 humanoid robot with dexterous 3-finger hands.
 
 Analyze the scene image and plan a manipulation action for the following task:
 Task: {task_description}
@@ -41,9 +41,9 @@ Based on the image, provide a manipulation plan as JSON with these fields:
 
 Respond with ONLY the JSON object, no other text."""
 
-COMMAND_INTERPRETATION_PROMPT = """You are controlling a humanoid robot arm with:
-- A 7-DOF arm (shoulder pan/lift/roll, elbow, wrist roll/pitch/yaw)
-- A 5-finger dexterous hand (thumb, index, middle, ring, pinky)
+COMMAND_INTERPRETATION_PROMPT = """You are controlling a Unitree G1 humanoid robot with:
+- Two 7-DOF arms (shoulder pitch/roll/yaw, elbow, wrist roll/pitch/yaw)
+- 3-finger dexterous hands (thumb, index, middle per hand)
   Each finger: 0.0 = fully open, 1.0 = fully closed
 
 Camera: You are viewing the scene from a fixed overhead camera at position (1.2, -0.8, 1.0), looking toward the workspace center from an elevated angle (60-degree FOV). The robot arm and table are visible in the image.

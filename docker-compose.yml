@@ -91,12 +91,17 @@ services:
     command: celery -A app.tasks.celery_app worker --loglevel=info --concurrency=1
     volumes:
       - ./backend:/app
+      - ${HOME}/.ssh:/root/.ssh:ro
     env_file: .env
     environment:
       - MUJOCO_GL=osmesa
       - VLM_PROVIDER=${VLM_PROVIDER:-}
       - VLM_API_KEY=${VLM_API_KEY:-}
       - VLM_MODEL=${VLM_MODEL:-claude-sonnet-4-5-20250929}
+      - CONTROL_MODEL_URL=${CONTROL_MODEL_URL:-http://localhost:8001}
+      - SLURM_HOST=${SLURM_HOST:-}
+      - DEFAULT_MAX_ATTEMPTS=${DEFAULT_MAX_ATTEMPTS:-3}
+      - DEFAULT_MAX_STEPS=${DEFAULT_MAX_STEPS:-5000}
     depends_on:
       postgres:
         condition: service_healthy

@@ -1,14 +1,9 @@
+"""Analysis stage: aggregate success/failure across attempts."""
+
 import json
 
 from app.tasks.base_stage import BaseStage
 from app.services.storage import upload_file
-from app.stages.s4_analysis.telemetry_processor import aggregate_telemetry
-from app.stages.s4_analysis.grasp_quality import compute_grasp_quality
-from app.stages.s4_analysis.stability import compute_stability
-from app.stages.s4_analysis.force_analysis import compute_force_metrics
-from app.stages.s4_analysis.task_completion import compute_task_completion
-from app.stages.s4_analysis.failure_modes import analyze_failure_modes
-from app.stages.s4_analysis.heatmap_generator import generate_contact_heatmap
 
 
 class AnalysisStage(BaseStage):
@@ -17,59 +12,49 @@ class AnalysisStage(BaseStage):
 
     def run(self, context: dict) -> dict:
         job_id = context["job_id"]
-        trial_results = context.get("simulation_results", [])
-        visual_mesh_key = context.get("visual_mesh_key", "")
+        attempt_results = context.get("simulation_results", [])
+        config = context.get("config", {})
+        task_description = config.get("task_description", "unknown task")
 
-        self.publish_progress(0.1, "Aggregating telemetry data")
-        aggregated = aggregate_telemetry(trial_results)
+        self.publish_progress(0.3, "Aggregating attempt results")
 
-        self.publish_progress(0.3, "Computing grasp quality metrics")
-        grasp = compute_grasp_quality(trial_results, aggregated)
+        total = len(attempt_results)
+        successes = sum(
+            1 for r in attempt_results if r.get("success", {}).get("success", False)
+        )
 
-        self.publish_progress(0.4, "Computing stability metrics")
-        stability = compute_stability(trial_results, aggregated)
+        attempts_summary = []
+        for r in attempt_results:
+            success_info = r.get("success", {})
+            attempts_summary.append({
+                "index": r.get("attempt_index", 0),
+                "success": success_info.get("success", False),
+                "confidence": success_info.get("confidence", 0.0),
+                "reasoning": success_info.get("reasoning", ""),
+                "video_key": r.get("video_key"),
+                "num_steps": r.get("num_steps", 0),
+                "sub_goal_results": success_info.get("sub_goal_results", []),
+            })
 
-        self.publish_progress(0.5, "Analyzing force profiles")
-        forces = compute_force_metrics(trial_results, aggregated)
-
-        self.publish_progress(0.6, "Evaluating task completion")
-        completion = compute_task_completion(trial_results, aggregated)
-
-        self.publish_progress(0.7, "Analyzing failure modes")
-        failures = analyze_failure_modes(trial_results, aggregated)
-
-        self.publish_progress(0.85, "Generating contact heatmap")
-        heatmap_key = None
-        try:
-            heatmap = generate_contact_heatmap(trial_results, visual_mesh_key)
-            if "glb_data" in heatmap:
-                heatmap_key = f"jobs/{job_id}/heatmap.glb"
-                upload_file(heatmap_key, heatmap["glb_data"], "model/gltf-binary")
-        except Exception:
-            pass  # Heatmap generation is optional
-
-        metrics = {
-            "grasp_quality": grasp,
-            "stability": stability,
-            "force_analysis": forces,
-            "task_completion": completion,
-            "failure_modes": failures,
+        summary = {
+            "task_description": task_description,
+            "total_attempts": total,
+            "successes": successes,
+            "success_rate": successes / max(total, 1),
+            "attempts": attempts_summary,
         }
 
-        # Store analysis results
-        analysis_key = f"jobs/{job_id}/analysis_result.json"
-        upload_file(analysis_key, json.dumps(metrics, default=str).encode(), "application/json")
+        self.publish_progress(0.7, "Saving results")
 
-        context["metrics"] = metrics
-        context["heatmap_key"] = heatmap_key
-        context["analysis_result_key"] = analysis_key
+        results_key = f"jobs/{job_id}/results.json"
+        upload_file(results_key, json.dumps(summary, indent=2).encode(), "application/json")
+
+        context["analysis_result_key"] = results_key
         context["stage_result"] = {
-            "grasp_quality_score": grasp["score"],
-            "stability_score": stability["score"],
-            "force_score": forces["score"],
-            "completion_score": completion["score"],
-            "num_failures": failures["total_failures"],
-            "heatmap_available": heatmap_key is not None,
+            "task_description": task_description,
+            "total_attempts": total,
+            "successes": successes,
+            "success_rate": successes / max(total, 1),
         }
 
         return context

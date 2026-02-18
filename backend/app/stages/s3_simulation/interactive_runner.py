@@ -15,7 +15,10 @@ import redis
 from PIL import Image, ImageDraw
 
 from app.core.config import settings
-from app.stages.s3_simulation.interactive_agent import InteractiveAgent
+try:
+    from app.stages.s3_simulation.humanoid_loader import STAND_CTRL
+except ImportError:
+    InteractiveAgent = None  # Interactive mode will be rebuilt on the new architecture
 
 logger = logging.getLogger(__name__)
 
@@ -146,8 +149,20 @@ def run_interactive_simulation(
     ee_site_id = _safe_name2id(model, mujoco.mjtObj.mjOBJ_SITE, "ee_site")
     obj_body_id = _safe_name2id(model, mujoco.mjtObj.mjOBJ_BODY, "object")
 
-    agent = InteractiveAgent()
-    agent.reset(model, data)
+    # Placeholder: interactive playground needs rework for the new two-level architecture.
+    # For now we just run a standing humanoid that responds to stop commands.
+    import numpy as np
+    stand_ctrl = np.array(STAND_CTRL, dtype=np.float64)
+
+    class _StubAgent:
+        phase = "idle"
+        phase_changed = False
+        status_message = ""
+        def receive_command(self, text): pass
+        def act(self, model, data, step, obs_image=None):
+            return stand_ctrl
+
+    agent = _StubAgent()
 
     r = redis.from_url(settings.REDIS_URL)
 
